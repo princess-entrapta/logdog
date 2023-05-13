@@ -1,0 +1,18 @@
+version: "3"
+services:
+  timescaledb-an:
+    image: timescale/timescaledb:latest-pg15
+    environment:
+      TIMESCALEDB_TELEMETRY: "off"
+      POSTGRES_PASSWORD: "test"
+      POSTGRES_USER: "postgres"
+      DB_PASSWORD: "user"
+    volumes:
+      - ./db_init/init-access-node.sh:/docker-entrypoint-initdb.d/222-init-access-node.sh
+      - ./db-data:/var/lib/postgresql/data
+    ports:
+      - 5432:5432
+  rabbitmq:
+    image: rabbitmq:latest
+    ports:
+      - 5672:5672
