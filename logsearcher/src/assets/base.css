@@ -84,3 +84,41 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+input {
+  background-color: #223322;
+  border: 1px solid #335533;
+  margin: 4px 8px;
+  color: white;
+  height: 32px;
+}
+
+label {
+  height: 40px;
+  line-height: 40px;
+}
+
+button,
+select {
+  background-color: #223322;
+  color: white;
+  border: 2px solid #337733;
+  border-radius: 8px;
+  margin: 4px 8px;
+  padding: 4px 12px;
+}
+
+button.secondary {
+  background-color: #222222;
+  border: 2px solid #333333;
+
+}
+
+.flexdiv {
+  display: flex;
+}
+
+.vflex {
+  display: flex;
+  flex-direction: column;
+}

@@ -1,6 +1,8 @@
 
 <script lang="ts">
 import LogItem from './LogItem.vue';
+import CreateView from './CreateView.vue';
+
 class Notes {
   logs: any[] = []
   density: any[] = []
@@ -11,31 +13,29 @@ class View {
 }
 
 export default {
+  mounted(){  
+    this.reqViews(null);
+  },
   data() {
     let state: Notes = { "logs": [], "density": new Array(80).fill(0) }
-    let cols = [{ name: "Data", query: "logdata" }]
-    let search = ''
     let start = new Date('05 October 2022 14:48 UTC')
     let end = new Date()
     let dragstart = -1
     let dragend = -1
     let loading = false
-    let filterName = ""
     let views: View[] = []
     let selectedView: View = { name: "", cols: [] }
-    fetch("/api/listviews").then((resp) => resp.json()).then(l => { this.views = l; this.selectedView = l[0] })
+    const createView = false
     return {
       state,
-      cols,
-      search,
       start,
       end,
       dragstart,
       dragend,
       loading,
-      filterName,
       selectedView,
-      views
+      views,
+      createView
     }
   },
   computed: {
@@ -58,6 +58,9 @@ export default {
     }
   },
   methods: {
+    reqViews(reqview: String| null) {
+        fetch("/api/listviews").then((resp) => resp.json()).then(l => { this.views = l; this.selectedView = (reqview ? l.find((v: View) => v.name===reqview) : l[0] )}).then(this.reqState)
+    },
     reqState() {
       this.loading = true
       this.state = { "logs": [], "density": new Array(80).fill(0) }
@@ -75,13 +78,6 @@ export default {
       ).then((resp) => resp.json().then((obj) => { this.state.logs = obj, this.loading = false }, () => this.loading = false), () => this.loading = false).then(this.loadnext)
       this.dragstart = -1
       this.dragend = -1
-    },
-    createView() {
-      fetch("/api/createview", {
-        method: "POST",
-        body: JSON.stringify({ columns: this.cols, filter: { name: this.filterName, query: this.search } }),
-        headers: { "Content-Type": "application/json" }
-      })
     },
     zoom(idx: number, endidx: number = -1) {
       if (endidx != -1 && endidx < idx) {
@@ -135,7 +131,8 @@ export default {
     },
   },
   components: {
-    LogItem
+    LogItem,
+    CreateView,
   }
 }
 
@@ -143,26 +140,15 @@ export default {
 </script>
 <template>
   <div class="container">
+    <CreateView v-if="createView" @cancel-view="createView=false" @create-view="(view) => {reqViews(view); createView=false}"></CreateView>
     <div>
-      <div class="flexdiv">
-        <input type="text" v-model="filterName">
-        <input type="text" class="largesearch" v-model="search">
-        <button @click="createView()">Create view</button>
-      </div>
-      <div class="flexdiv">
-        <div v-for=" i in [...Array(cols.length).keys()]">
-          <input type="text" v-model="cols[i].name">
-          <input type="text" class="largesearch" v-model="cols[i].query">
-          <button @click="cols.splice(i, 1)">-</button>
-        </div>
-        <button @click=" cols.push({ name: 'New column', query: '' })">Add column</button>
-      </div>
-    </div>
-    <select v-model="selectedView">
-      <option v-for="view in views" :value="view">{{ view.name != "" ? view.name : "<All logs>" }}</option>
+    <select v-model="selectedView" @change="reqState">
+      <option v-for="view in views" :value="view">{{ view.name }}</option>
     </select>
+    <button v-if="!createView" @click="createView=true">New filter view</button>
+    </div>
     <div v-if="selectedView.name">
-      <div class="flexdiv">
+      <div class="flexdiv center">
         <button @click="zoomout()">Zoom out</button>
         <span>{{ start.toUTCString() }}</span>
 
@@ -251,6 +237,10 @@ tr:nth-child(even) {
   flex: 1;
 }
 
+.center {
+  justify-content: center;
+}
+
 .big-col>div {
   display: inline-block;
 }
@@ -299,14 +289,6 @@ tr:nth-child(even) {
 
 .container table {
   width: 100%;
-}
-
-.flexdiv {
-  display: flex;
-}
-
-.largesearch {
-  flex: 1;
 }
 
 .info {
