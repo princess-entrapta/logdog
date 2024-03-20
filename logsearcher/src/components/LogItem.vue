@@ -26,7 +26,8 @@ export default {
                 @node-click="clicked = false">
             </VueJsonPretty>
         </div>
-        <div v-else v-if="obj" @click="clicked = true"><span>{...}</span> // {{ Object.keys(obj).length }} items
+        <div v-else v-if="obj" @click="clicked = true"><span>{{ Array.isArray(obj) ? '[...]' : '{...}' }}</span> // {{
+            Object.keys(obj).length }} items
         </div>
     </div>
 </template>

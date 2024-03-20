@@ -2,11 +2,10 @@
 <script lang="ts">
 import LogItem from './LogItem.vue';
 import CreateView from './CreateView.vue';
+import Timeline from './Timeline.vue'
+import { useTimeStore } from '@/stores/timestore';
+import { useLogStore } from '@/stores/logstore';
 
-class Notes {
-  logs: any[] = []
-  density: any[] = []
-}
 class View {
   name: String = ""
   cols: String[] = []
@@ -17,33 +16,23 @@ export default {
     this.reqViews(null);
   },
   data() {
-    let state: Notes = { "logs": [], "density": new Array(80).fill(0) }
-    let start = new Date('05 October 2022 14:48 UTC')
-    let end = new Date()
-    let dragstart = -1
-    let dragend = -1
+    let timeStore = useTimeStore()
+    let state = useLogStore()
     let loading = false
     let views: View[] = []
     let selectedView: View = { name: "", cols: [] }
     const createView = false
     return {
       state,
-      start,
-      end,
-      dragstart,
-      dragend,
       loading,
       selectedView,
       views,
-      createView
+      createView,
+      timeStore,
     }
   },
   computed: {
-    maxdens() {
-      return Math.max(0, ...this.state.density)
-    },
     totallogs() {
-      console.log(this.state.density)
       let sum = this.state.density.reduce((acc, val) => acc + val)
       if (sum > 1000000000) {
         return Number((sum / 1000000000.0).toPrecision(3)) + "B"
@@ -63,58 +52,23 @@ export default {
     },
     reqState() {
       this.loading = true
-      this.state = { "logs": [], "density": new Array(80).fill(0) }
+      this.state.logs = []
+      this.state.density = new Array(80).fill(0)
       fetch("/api/density", {
         method: "POST",
-        body: JSON.stringify({ start: this.start.toJSON(), end: this.end.toJSON(), table: this.selectedView.name }),
+        body: JSON.stringify({ start: this.timeStore.start.toJSON(), end: this.timeStore.end.toJSON(), table: this.selectedView.name }),
         headers: { "Content-Type": "application/json" }
       }
       ).then((resp) => resp.json().then((obj) => { this.state.density = obj, this.loading = false }, () => this.loading = false), () => this.loading = false)
       fetch("/api/logs", {
         method: "POST",
-        body: JSON.stringify({ start: this.start.toJSON(), end: this.end.toJSON(), table: this.selectedView.name }),
+        body: JSON.stringify({ start: this.timeStore.start.toJSON(), end: this.timeStore.end.toJSON(), table: this.selectedView.name }),
         headers: { "Content-Type": "application/json" }
       }
       ).then((resp) => resp.json().then((obj) => { this.state.logs = obj, this.loading = false }, () => this.loading = false), () => this.loading = false).then(this.loadnext)
-      this.dragstart = -1
-      this.dragend = -1
+
     },
-    zoom(idx: number, endidx: number = -1) {
-      if (endidx != -1 && endidx < idx) {
-        this.zoom(endidx, idx)
-        return
-      }
-      const msStart = this.start.getTime()
-      const msEnd = this.end.getTime()
-      const interval = Math.max((msEnd - msStart) / this.state.density.length, 1);
-      this.start = new Date(msStart + idx * interval)
-      this.end = new Date(msStart + (endidx == -1 ? (idx + 1) : (endidx + 1)) * interval)
-      this.reqState()
-    },
-    zoomout() {
-      const msStart = this.start.getTime()
-      const msEnd = this.end.getTime()
-      const interval = (msEnd - msStart);
-      this.start = new Date(msStart - interval / 2)
-      this.end = new Date(msEnd + interval / 2)
-      this.reqState()
-    },
-    goLeft() {
-      const msStart = this.start.getTime()
-      const msEnd = this.end.getTime()
-      const interval = Math.max((msEnd - msStart) / this.state.density.length, 1);
-      this.start = new Date(msStart - 8 * interval)
-      this.end = new Date(msEnd - 8 * interval)
-      this.reqState()
-    },
-    goRight() {
-      const msStart = this.start.getTime()
-      const msEnd = this.end.getTime()
-      const interval = Math.max((msEnd - msStart) / this.state.density.length, 1);
-      this.start = new Date(msStart + 8 * interval)
-      this.end = new Date(msEnd + 8 * interval)
-      this.reqState()
-    },
+
     checkscroll(ev: any) {
       if (ev.currentTarget.scrollTopMax - ev.currentTarget.scrollTop < 200 && !this.loading) {
         this.loading = true
@@ -124,7 +78,7 @@ export default {
     loadnext() {
       fetch("/api/logs", {
         method: "POST",
-        body: JSON.stringify({ start: this.start.toJSON(), end: this.end.toJSON(), offset: this.state.logs.length, table: this.selectedView.name }),
+        body: JSON.stringify({ start: this.timeStore.start.toJSON(), end: this.timeStore.end.toJSON(), offset: this.state.logs.length, table: this.selectedView.name }),
         headers: { "Content-Type": "application/json" }
       }
       ).then((resp) => resp.json().then((obj) => { this.state.logs = this.state.logs.concat(obj); this.loading = false }, () => this.loading = false), () => this.loading = false)
@@ -133,6 +87,7 @@ export default {
   components: {
     LogItem,
     CreateView,
+    Timeline,
   }
 }
 
@@ -148,31 +103,7 @@ export default {
     <button v-if="!createView" @click="createView=true">New filter view</button>
     </div>
     <div v-if="selectedView.name">
-      <div class="flexdiv center">
-        <button @click="zoomout()">Zoom out</button>
-        <span>{{ start.toUTCString() }}</span>
-
-        <button @click="goLeft()">&lt;</button>
-        <div class="timeline" @dragstart="false" draggable="false">
-          <div v-for="( c, idx ) in  state.density " @mousedown="dragstart = idx" @mousemove="dragend = idx;"
-            @mouseup="zoom(dragstart, dragend)"
-            :class="dragstart >= 0 && (idx >= dragstart && idx <= dragend || idx <= dragstart && idx >= dragend) ? 'range' : ''"
-            draggable="false">
-            <div class="light" :style="'height:' + (Math.min(50, (150.0 * c) / maxdens)) + 'px ;'" draggable="false">
-            </div>
-            <div class="medium" :style="'height:' + (Math.max(Math.min(50, (150.0 * c) / maxdens - 50.0), 0)) + 'px ;'"
-              draggable="false" @dragstart="false">
-            </div>
-            <div class="heavy" :style="'height:' + (Math.max(Math.min(50, (150.0 * c) / maxdens - 100.0), 0)) + 'px ;'"
-              draggable="false" @dragstart="false">
-            </div>
-          </div>
-
-        </div>
-        <button @click="goRight()">&gt;</button>
-
-        <span>{{ end.toUTCString() }}</span>
-      </div>
+      <Timeline @timechange="reqState"></Timeline>
       <div class="flexdiv">
         <span>Total number of records: <strong>{{ totallogs }}</strong></span>
       </div>
@@ -245,42 +176,7 @@ tr:nth-child(even) {
   display: inline-block;
 }
 
-.timeline>div {
-  width: calc(0.6vw - 2px);
-  border: 1px solid #444444;
-  display: inline-block;
-  height: 50px;
-  border-collapse: collapse;
-  position: relative;
-  cursor: pointer;
-}
 
-.timeline>div:hover,
-.timeline>div.range {
-  background-color: rgba(255, 255, 255, 0.4);
-}
-
-.timeline>div>div {
-  position: absolute;
-  background-color: #4488cc;
-  bottom: 0;
-  width: 100%;
-}
-
-.light {
-  opacity: 0.35;
-  z-index: -1;
-}
-
-.medium {
-  opacity: 0.5;
-  z-index: -2;
-}
-
-.heavy {
-  opacity: 1;
-  z-index: -3;
-}
 
 .container {
   width: 80vw;
