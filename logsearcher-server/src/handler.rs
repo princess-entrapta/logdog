@@ -4,10 +4,8 @@ use axum::{
     response::IntoResponse,
 };
 use chrono::NaiveDateTime;
-use num_traits::cast::ToPrimitive;
 use serde_json::json;
 use sqlx::types::BigDecimal;
-use sqlx::Row;
 use std::{cmp::max, iter::zip, sync::Arc};
 
 use crate::{
@@ -400,17 +398,7 @@ pub async fn post_get_metric(
 pub async fn list_views(
     State(data): State<Arc<AppState>>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    match sqlx::query(
-        "
-    SELECT filters.name, array_agg(cols.metric_agg ORDER BY idx), array_agg(cols.name ORDER BY idx) 
-        FROM filters 
-            JOIN column_filter ON filters.name = column_filter.filter_name 
-            JOIN cols ON cols.name = column_filter.column_name 
-        GROUP BY filters.name;",
-    )
-    .fetch_all(&data.db)
-    .await
-    {
+    match data.db.list_filters().await {
         Ok(rows) => Ok(axum::Json(
             rows.into_iter()
                 .map(|r| {
