@@ -1,76 +1,44 @@
-
 <script lang="ts">
 import LogItem from './LogItem.vue';
 import CreateView from './CreateView.vue';
-import Timeline from './Timeline.vue'
-import { useTimeStore } from '@/stores/timestore';
-import { useLogStore } from '@/stores/logstore';
-
-class View {
-  name: String = ""
-  cols: String[] = []
-}
+import Timeline from './Timeline.vue';
+import Graphic from './Graphic.vue';
+import { useLogStore, type View } from '@/stores/logstore';
+import { human_readable } from '@/logic/utils';
 
 export default {
-  mounted(){  
+  mounted() {
     this.reqViews(null);
   },
   data() {
-    let timeStore = useTimeStore()
     let state = useLogStore()
-    let loading = false
     let views: View[] = []
-    let selectedView: View = { name: "", cols: [] }
     const createView = false
+    const loading = false
     return {
       state,
-      loading,
-      selectedView,
       views,
+      loading,
       createView,
-      timeStore,
     }
   },
   computed: {
     totallogs() {
-      let sum = this.state.density.reduce((acc, val) => acc + val)
-      if (sum > 1000000000) {
-        return Number((sum / 1000000000.0).toPrecision(3)) + "B"
-      }
-      if (sum > 1000000) {
-        return Number((sum / 1000000.0).toPrecision(3)) + "M"
-      }
-      if (sum > 1000) {
-        return Number((sum / 1000.0).toPrecision(3)) + "K"
-      }
-      return sum
+      let sum = this.state.metrics.NumberOfLogs.data.reduce((acc, val) => acc + val)
+      return human_readable(sum)
     }
   },
   methods: {
-    reqViews(reqview: String| null) {
-        fetch("/api/listviews").then((resp) => resp.json()).then(l => { this.views = l; this.selectedView = (reqview ? l.find((v: View) => v.name===reqview) : l[0] )}).then(this.reqState)
+    reqViews(reqview: String | null) {
+      fetch("/api/listviews").then((resp) => resp.json()).then(l => { this.views = l; this.state.currentView = (reqview ? l.find((v: View) => v.name === reqview) : l[0]) }).then(this.reqState)
     },
     reqState() {
-      this.loading = true
-      this.state.logs = []
-      this.state.density = new Array(80).fill(0)
-      fetch("/api/density", {
-        method: "POST",
-        body: JSON.stringify({ start: this.timeStore.start.toJSON(), end: this.timeStore.end.toJSON(), table: this.selectedView.name }),
-        headers: { "Content-Type": "application/json" }
-      }
-      ).then((resp) => resp.json().then((obj) => { this.state.density = obj, this.loading = false }, () => this.loading = false), () => this.loading = false)
-      fetch("/api/logs", {
-        method: "POST",
-        body: JSON.stringify({ start: this.timeStore.start.toJSON(), end: this.timeStore.end.toJSON(), table: this.selectedView.name }),
-        headers: { "Content-Type": "application/json" }
-      }
-      ).then((resp) => resp.json().then((obj) => { this.state.logs = obj, this.loading = false }, () => this.loading = false), () => this.loading = false).then(this.loadnext)
-
+      this.state.update();
+      this.loadnext();
     },
 
     checkscroll(ev: any) {
-      if (ev.currentTarget.scrollTopMax - ev.currentTarget.scrollTop < 200 && !this.loading) {
+      if (ev.currentTarget.scrollTopMax - ev.currentTarget.scrollTop < 200 && !this.state.loading) {
         this.loading = true
         this.loadnext()
       }
@@ -78,7 +46,7 @@ export default {
     loadnext() {
       fetch("/api/logs", {
         method: "POST",
-        body: JSON.stringify({ start: this.timeStore.start.toJSON(), end: this.timeStore.end.toJSON(), offset: this.state.logs.length, table: this.selectedView.name }),
+        body: JSON.stringify({ start: this.state.start.toJSON(), end: this.state.end.toJSON(), offset: this.state.logs.length, table: this.state.currentView.name }),
         headers: { "Content-Type": "application/json" }
       }
       ).then((resp) => resp.json().then((obj) => { this.state.logs = this.state.logs.concat(obj); this.loading = false }, () => this.loading = false), () => this.loading = false)
@@ -95,14 +63,15 @@ export default {
 </script>
 <template>
   <div class="container">
-    <CreateView v-if="createView" @cancel-view="createView=false" @create-view="(view) => {reqViews(view); createView=false}"></CreateView>
+    <CreateView v-if="createView" @cancel-view="createView = false"
+      @create-view="(view) => { reqViews(view); createView = false }"></CreateView>
     <div>
-    <select v-model="selectedView" @change="reqState">
-      <option v-for="view in views" :value="view">{{ view.name }}</option>
-    </select>
-    <button v-if="!createView" @click="createView=true">New filter view</button>
+      <select v-model="state.currentView" @change="reqState">
+        <option v-for="view in views" :value="view">{{ view.name }}</option>
+      </select>
+      <button v-if="!createView" @click="createView = true">New filter view</button>
     </div>
-    <div v-if="selectedView.name">
+    <div v-if="state.currentView.name">
       <Timeline @timechange="reqState"></Timeline>
       <div class="flexdiv">
         <span>Total number of records: <strong>{{ totallogs }}</strong></span>
@@ -115,8 +84,8 @@ export default {
                 <th class="smol-col">
                   Time
                 </th>
-                <th v-for=" i in selectedView.cols " class="big-col">
-                  {{ i }}
+                <th v-for=" i in state.currentView.cols " class="big-col">
+                  {{ i.metric }}
                 </th>
               </tr>
             </thead>
@@ -125,7 +94,7 @@ export default {
                 <td class="smol-col">
                   <span :class="log[1].toLowerCase()"></span><span>{{ log[0] }}</span>
                 </td>
-                <td class="big-col" v-for=" val, i in selectedView.cols.length ">
+                <td class="big-col" v-for=" val, i in state.currentView.cols.length ">
                   <LogItem :obj="log[i + 2]"></LogItem>
                 </td>
               </tr>
@@ -168,9 +137,6 @@ tr:nth-child(even) {
   flex: 1;
 }
 
-.center {
-  justify-content: center;
-}
 
 .big-col>div {
   display: inline-block;
@@ -179,7 +145,7 @@ tr:nth-child(even) {
 
 
 .container {
-  width: 80vw;
+  width: 92vw;
   margin: auto;
 }
 

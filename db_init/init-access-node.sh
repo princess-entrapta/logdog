@@ -27,7 +27,8 @@ CREATE TABLE column_filter (
 
 CREATE TABLE cols (
   query TEXT,
-  name TEXT PRIMARY KEY
+  name TEXT PRIMARY KEY,
+  metric_agg TEXT
 );
 
 CREATE INDEX idx_logdata ON logs USING GIN (logdata);

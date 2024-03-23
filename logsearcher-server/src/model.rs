@@ -27,6 +27,7 @@ fn default_table() -> String {
 pub struct ColumnDef {
     pub name: String,
     pub query: String,
+    pub metric_agg: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -40,4 +41,12 @@ pub struct FilterDef {
 pub struct ViewQuery {
     pub columns: Vec<ColumnDef>,
     pub filter: FilterDef,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct MetricQuery {
+    pub start: chrono::DateTime<Utc>,
+    pub end: chrono::DateTime<Utc>,
+    pub metric_name: String,
+    pub view_name: String,
 }

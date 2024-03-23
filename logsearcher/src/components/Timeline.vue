@@ -1,104 +1,94 @@
 <script lang="ts">
 import { useLogStore } from '@/stores/logstore'
-import { useTimeStore } from '@/stores/timestore'
+import Graphic from './Graphic.vue'
 
 export default {
-    data() {
-        const timeStore = useTimeStore()
-        const dragstart = -1
-        const dragend = -1
-        const logs = useLogStore()
-
-        return {timeStore, dragstart, dragend, logs}
-    },
+  data() {
+    const timeStore = useLogStore()
+    const colors = ['#882255', '#228822', '#224488', '#887722', '#772288', '#227788']
+    return { timeStore, colors }
+  },
   methods: {
     zoom(idx: number, endidx: number = -1) {
-        if (endidx != -1 && endidx < idx) {
-            this.zoom(endidx, idx)
-            return
-        }
-        const msStart = this.timeStore.start.getTime()
-        const msEnd = this.timeStore.end.getTime()
-        const interval = Math.max((msEnd - msStart) / 80, 1);
-        this.timeStore.start = new Date(msStart + idx * interval)
-        this.timeStore.end = new Date(msStart + (endidx == -1 ? (idx + 1) : (endidx + 1)) * interval)
-        this.$emit('timechange')
-        this.dragstart = -1
-        this.dragend = -1
-        },
+      if (endidx != -1 && endidx < idx) {
+        this.zoom(endidx, idx)
+        return
+      }
+      const msStart = this.timeStore.start.getTime()
+      const msEnd = this.timeStore.end.getTime()
+      const interval = Math.max((msEnd - msStart) / 120, 1);
+      this.timeStore.start = new Date(msStart + idx * interval)
+      this.timeStore.end = new Date(msStart + (endidx == -1 ? (idx + 1) : (endidx + 1)) * interval)
+      this.$emit('timechange')
+    },
     zoomout() {
-        const msStart = this.timeStore.start.getTime()
-        const msEnd = this.timeStore.end.getTime()
-        const interval = (msEnd - msStart);
-        this.timeStore.start = new Date(msStart - interval / 2)
-        this.timeStore.end = new Date(msEnd + interval / 2)
-        this.$emit('timechange')
-        this.dragstart = -1
-        this.dragend = -1
-        },
+      const msStart = this.timeStore.start.getTime()
+      const msEnd = this.timeStore.end.getTime()
+      const interval = (msEnd - msStart);
+      this.timeStore.start = new Date(msStart - interval / 2)
+      this.timeStore.end = new Date(msEnd + interval / 2)
+      this.$emit('timechange')
+    },
+    zoomin() {
+      this.zoom(30, 90)
+    },
     goLeft() {
-        const msStart = this.timeStore.start.getTime()
-        const msEnd = this.timeStore.end.getTime()
-        const interval = Math.max((msEnd - msStart) / 80, 1);
-        this.timeStore.start = new Date(msStart - 8 * interval)
-        this.timeStore.end = new Date(msEnd - 8 * interval)
-        this.$emit('timechange')
-        this.dragstart = -1
-        this.dragend = -1
-        },
+      const msStart = this.timeStore.start.getTime()
+      const msEnd = this.timeStore.end.getTime()
+      const interval = Math.max((msEnd - msStart) / 120, 1);
+      this.timeStore.start = new Date(msStart - 8 * interval)
+      this.timeStore.end = new Date(msEnd - 8 * interval)
+      this.$emit('timechange')
+    },
     goRight() {
-        const msStart = this.timeStore.start.getTime()
-        const msEnd = this.timeStore.end.getTime()
-        const interval = Math.max((msEnd - msStart) / 80, 1);
-        this.timeStore.start = new Date(msStart + 8 * interval)
-        this.timeStore.end = new Date(msEnd + 8 * interval)
-        this.$emit('timechange')
-        this.dragstart = -1
-        this.dragend = -1
-        },
-    }
+      const msStart = this.timeStore.start.getTime()
+      const msEnd = this.timeStore.end.getTime()
+      const interval = Math.max((msEnd - msStart) / 120, 1);
+      this.timeStore.start = new Date(msStart + 8 * interval)
+      this.timeStore.end = new Date(msEnd + 8 * interval)
+      this.$emit('timechange')
+    },
+  },
+  components: {
+    Graphic
+  }
 }
 </script>
 
 
 
 <template>
-<div class="flexdiv center">
-<button @click="zoomout()">Zoom out</button>
-<span>{{ timeStore.start.toUTCString() }}</span>
+  <div class="flexdiv center">
 
-<button @click="goLeft()">&lt;</button>
-<div class="timeline" @dragstart="false" draggable="false">
-    <div v-for="( c, idx ) in  logs.density " @mousedown="dragstart = idx" @mousemove="dragend = idx;"
-        @mouseup="zoom(dragstart, dragend)"
-        :class="dragstart >= 0 && (idx >= dragstart && idx <= dragend || idx <= dragstart && idx >= dragend) ? 'range' : ''"
-        draggable="false">
-        <div class="light" :style="'height:' + (Math.min(50, (150.0 * c) / logs.maxdens)) + 'px ;'" draggable="false">
-        </div>
-        <div class="medium" :style="'height:' + (Math.max(Math.min(50, (150.0 * c) / logs.maxdens - 50.0), 0)) + 'px ;'"
-            draggable="false" @dragstart="false">
-        </div>
-        <div class="heavy" :style="'height:' + (Math.max(Math.min(50, (150.0 * c) / logs.maxdens - 100.0), 0)) + 'px ;'"
-            draggable="false" @dragstart="false">
-        </div>
-    </div>
+    <button @click="goLeft()">&lt;</button>
+    <span>{{ timeStore.start.toUTCString() }}</span>
+    <button @click="zoomin()">Zoom In</button>
+    <button @click="zoomout()">Zoom Out</button>
+    <span>{{ timeStore.end.toUTCString() }}</span>
+    <button @click="goRight()">&gt;</button>
 
-</div>
-<button @click="goRight()">&gt;</button>
-
-<span>{{ timeStore.end.toUTCString() }}</span>
-</div>
+  </div>
+  <div>
+    <Graphic v-for="(name, idx) in timeStore.graphics" :graphname="name" :color="colors[idx]"
+      @zoom="(i: number) => zoom(i - 2, i + 2)"></Graphic>
+  </div>
 </template>
 
 <style scoped>
 .timeline>div {
-  width: calc(0.6vw - 2px);
+  flex: 1;
   border: 1px solid #444444;
   display: inline-block;
   height: 50px;
   border-collapse: collapse;
   position: relative;
   cursor: pointer;
+}
+
+span {
+  line-height: 36px;
+  width: calc(200px + 10vw);
+  text-align: center;
 }
 
 .timeline>div:hover,
@@ -128,5 +118,4 @@ export default {
   opacity: 1;
   z-index: -3;
 }
-
 </style>

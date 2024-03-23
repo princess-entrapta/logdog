@@ -8,27 +8,21 @@ use axum::http::{
     header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     HeaderValue, Method,
 };
-use deadpool_postgres::*;
-use tokio_postgres::NoTls;
-
 use dotenv::dotenv;
 use route::create_router;
 use tower_http::cors::CorsLayer;
 
 pub struct AppState {
-    db: deadpool_postgres::Pool,
+    db: PgPool,
 }
+use sqlx::PgPool;
 
 #[tokio::main]
 async fn main() {
     dotenv().ok();
-
-    let mut cfg = Config::new();
-    cfg.host = Some("localhost".to_owned());
-    cfg.user = Some("postgres".to_owned());
-    cfg.dbname = Some("postgres".to_owned());
-    cfg.password = Some("test".to_owned());
-    let pool = cfg.create_pool(None, NoTls).unwrap();
+    let pool = PgPool::connect("postgresql://postgres:test@localhost/postgres")
+        .await
+        .unwrap();
 
     let cors = CorsLayer::new()
         .allow_origin("http://localhost:8000".parse::<HeaderValue>().unwrap())
