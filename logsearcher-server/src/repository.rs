@@ -80,7 +80,6 @@ impl Repository {
             Some(val) => format!("{} microseconds", max(val / 119, 10)),
             None => format!("{} milliseconds", max(interval_millis / 119, 10)),
         };
-
         let query = format!(
             "
         SELECT {metric_agg}(({col_query})::numeric)  
@@ -124,7 +123,18 @@ impl Repository {
                 end_offset => null,
                 schedule_interval => INTERVAL '10 seconds');",
         );
-        let _res = sqlx::query(query.as_str()).execute(&self.pool).await?;
+        let _res = sqlx::raw_sql(query.as_str()).execute_many(&self.pool);
+        Ok(())
+    }
+
+    pub async fn delete_view(&self, view_name: String) -> Result<(), sqlx::error::Error> {
+        let query = format!(
+            "
+            DELETE FROM filter WHERE name = {view_name}; 
+            DELETE FROM column_filter WHERE filter_name = {view_name}; 
+            DELETE FROM cols WHERE name NOT IN (SELECT column_name FROM column_filters);"
+        );
+        let _res = sqlx::raw_sql(&query.as_str()).execute_many(&self.pool);
         Ok(())
     }
 

@@ -14,7 +14,7 @@ impl From<sqlx::error::Error> for AppError {
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         match self {
-            AppError::DBError(err) => tracing::error!("{}", err.to_string()),
+            AppError::DBError(err) => tracing::error!(message = err.to_string()),
         }
         (StatusCode::INTERNAL_SERVER_ERROR, "Error".to_owned()).into_response()
     }

@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Json, State},
+    extract::{Json, Path, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -54,7 +54,15 @@ pub async fn logs_handler(
     ))
 }
 
-pub async fn view_handler(
+pub async fn delete_view_handler(
+    State(data): State<AppState>,
+    Path(view_name): Path<String>,
+) -> Result<impl IntoResponse, AppError> {
+    data.db.delete_view(view_name).await?;
+    Ok(StatusCode::OK)
+}
+
+pub async fn create_view_handler(
     State(data): State<AppState>,
     log_query: Json<ViewQuery>,
 ) -> Result<impl IntoResponse, AppError> {
