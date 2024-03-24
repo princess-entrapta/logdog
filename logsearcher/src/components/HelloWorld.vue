@@ -94,8 +94,8 @@ export default {
                 <td class="smol-col">
                   <span :class="log[1].toLowerCase()"></span><span>{{ log[0] }}</span>
                 </td>
-                <td class="big-col" v-for=" val, i in state.currentView.cols.length ">
-                  <LogItem :obj="log[i + 2]"></LogItem>
+                <td class="big-col" v-for=" val, i in log[2]">
+                  <LogItem :obj="log[2][i]"></LogItem>
                 </td>
               </tr>
             </tbody>

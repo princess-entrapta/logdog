@@ -3,11 +3,10 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use chrono::NaiveDateTime;
 use serde_json::json;
-use sqlx::types::BigDecimal;
-use std::{cmp::max, iter::zip, sync::Arc};
+use std::iter::zip;
 
+use crate::errors::AppError;
 use crate::{
     model::{LogQuery, MetricQuery, ViewQuery},
     AppState,
@@ -24,288 +23,41 @@ pub async fn health_checker_handler() -> impl IntoResponse {
     axum::Json(json_response)
 }
 
-pub async fn upsert_columns_and_filters(
-    data: &Arc<AppState>,
-    column_names: &Vec<String>,
-    columns_queries: &Vec<(String, String)>,
-    filter_name: &String,
-    filter_query: &String,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let values: Vec<String> = column_names
-        .into_iter()
-        .zip(columns_queries)
-        .map(|(name, (query, metric_agg))| {
-            [
-                "('",
-                name,
-                "','",
-                &query.replace("'", "''"),
-                "','",
-                &metric_agg,
-                "')",
-            ]
-            .join("")
-        })
-        .collect();
-    let query =format!(
-                "INSERT INTO cols (name, query, metric_agg) VALUES {} ON CONFLICT (name) DO UPDATE SET query = EXCLUDED.query",
-                values.join(","));
-    let _res = sqlx::query(query.as_str()).execute(&data.db).await;
-
-    let _res = sqlx::query("DELETE FROM column_filter WHERE filter_name = $1")
-        .bind(filter_name)
-        .execute(&data.db)
-        .await;
-    let filter_column_values: Vec<String> = column_names
-        .into_iter()
-        .enumerate()
-        .map(|(idx, name)| format!("('{}', '{}', {})", name, filter_name, idx))
-        .collect();
-
-    let query = format!(
-        "INSERT INTO column_filter (column_name, filter_name, idx) VALUES {}",
-        filter_column_values.join(",")
-    );
-    let _res = sqlx::query(&query.as_str()).execute(&data.db).await;
-
-    let _res = sqlx::query(
-            format!(
-                "INSERT INTO filters (name, query) VALUES ('{}', '{}') ON CONFLICT (name) DO UPDATE SET query = EXCLUDED.query",
-                filter_name, filter_query.replace("'", "''")
-            ).as_str()).execute(&data.db).await;
-    Ok(())
-}
-
-pub async fn create_view(
-    data: &Arc<AppState>,
-    columns_queries: Vec<(String, String)>,
-    column_names: Vec<String>,
-    filter_name: String,
-    filter_query: String,
-) -> Result<(StatusCode, String), Box<dyn std::error::Error>> {
-    upsert_columns_and_filters(
-        data,
-        &column_names,
-        &columns_queries,
-        &filter_name,
-        &filter_query,
-    )
-    .await?;
-    let query = format!(
-        "DROP MATERIALIZED VIEW IF EXISTS {}_sec_count; DROP MATERIALIZED VIEW IF EXISTS {}_min_count; ",
-        filter_name, filter_name
-    );
-    let _res = sqlx::query(query.as_str()).execute(&data.db).await;
-
-    let query = format!(
-        "CREATE MATERIALIZED VIEW {}_sec_count (time_bucket, count) WITH (timescaledb.continuous) 
-            AS SELECT time_bucket('1s', time), COUNT(*) from logs where {} GROUP BY time_bucket('1s', time)",
-        filter_name, filter_query,
-        );
-    let _res = sqlx::query(query.as_str()).execute(&data.db).await;
-
-    let query = format!(
-        "CREATE MATERIALIZED VIEW {}_min_count (time_bucket, count) WITH (timescaledb.continuous) 
-        AS SELECT time_bucket('1 minute', time), COUNT(*) from logs where {} GROUP BY time_bucket('1 minute', time)",
-        filter_name, filter_query,
-    );
-
-    let _res = sqlx::query(query.as_str()).execute(&data.db).await;
-
-    let query = format!(
-        "SELECT add_continuous_aggregate_policy('{}_min_count',
-    start_offset => null,
-    end_offset => null,
-    schedule_interval => INTERVAL '10 minute');",
-        filter_name,
-    );
-    let _res = sqlx::query(query.as_str()).execute(&data.db).await;
-
-    let query = format!(
-        "SELECT add_continuous_aggregate_policy('{}_sec_count',
-    start_offset => null,
-    end_offset => null,
-    schedule_interval => INTERVAL '10 seconds');",
-        filter_name,
-    );
-    let _res = sqlx::query(query.as_str()).execute(&data.db).await;
-
-    return Ok((StatusCode::CREATED, "{}".to_string()));
-}
-
-pub async fn get_logs(
-    data: &Arc<AppState>,
-    table: String,
-    start: chrono::NaiveDateTime,
-    end: chrono::NaiveDateTime,
-    offset: i64,
-) -> Result<Vec<Vec<serde_json::Value>>, String> {
-    let query = "
-    SELECT COUNT(*), filters.query, array_agg(cols.query ORDER BY idx) 
-        FROM column_filter 
-            JOIN filters ON filters.name = column_filter.filter_name 
-            JOIN cols ON cols.name = column_filter.column_name 
-        WHERE filters.name = $1 
-        GROUP BY filters.name, filters.query";
-    let row = sqlx::query(query)
-        .bind(table)
-        .fetch_one(&data.db)
-        .await
-        .unwrap();
-
-    let col_number: usize = row.get::<i64, _>(0) as usize;
-    let filter_query: String = row.get::<String, _>(1);
-    let column_queries: Vec<String> = row.get::<Vec<String>, _>(2);
-    let query = format!(
-                "SELECT time, level, {} from logs WHERE {} AND time >= '{}'::TIMESTAMP AND time <= '{}'::TIMESTAMP LIMIT 40 OFFSET {}",
-                column_queries.join(","), filter_query, start, end, offset
-            );
-    let rows = match sqlx::query(query.as_str()).fetch_all(&data.db).await {
-        Err(e) => return Err(e.to_string()),
-        Ok(rows) => rows,
-    };
-    let mut ret_val: Vec<Vec<serde_json::Value>> = Vec::new();
-    for r in rows {
-        let mut ret_line: Vec<serde_json::Value> = Vec::new();
-        ret_line.push(match r.try_get::<NaiveDateTime, _>(0) {
-            Ok(val) => val.to_string().into(),
-            Err(_) => "".into(),
-        });
-        ret_line.push(r.get::<Option<String>, _>(1).into());
-        for i in 2..col_number + 2 {
-            let json_value: serde_json::Value = match r.try_get::<serde_json::Value, _>(i) {
-                Ok(val) => val,
-                Err(_) => match r.try_get::<f64, _>(i) {
-                    Ok(val) => val.into(),
-                    Err(_) => match r.try_get::<Vec<String>, _>(i) {
-                        Ok(strval) => strval.into(),
-                        Err(_) => match r.try_get::<String, _>(i) {
-                            Ok(strval) => strval.into(),
-                            Err(_) => serde_json::from_str("null").unwrap(),
-                        },
-                    },
-                },
-            };
-            ret_line.push(json_value);
-        }
-        ret_val.push(ret_line);
-    }
-    Ok(ret_val)
-}
-
-pub async fn get_density(
-    data: &Arc<AppState>,
-    table: String,
-    start: chrono::NaiveDateTime,
-    end: chrono::NaiveDateTime,
-) -> Result<Vec<serde_json::Number>, (StatusCode, String)> {
-    let interval_millis = (end - start).num_milliseconds();
-    let interval_micro = (end - start).num_microseconds();
-    let interval_str = match interval_micro {
-        Some(val) => format!("{} microseconds", max(val / 119, 10)),
-        None => format!("{} milliseconds", max(interval_millis / 119, 10)),
-    };
-    let query = match interval_millis {
-        0..=100000 => {
-            let try_filter = sqlx::query("SELECT query from filters WHERE name = $1")
-                .bind(table)
-                .fetch_one(&data.db)
-                .await;
-            let where_query = match try_filter {
-                Ok(r) => r.get::<String, _>(0),
-                Err(error) => return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string())),
-            };
-            format!(
-                "
-            SELECT COUNT(*)::bigint
-                FROM logs
-                WHERE {}
-                  AND time >= '{}'::TIMESTAMP
-                  AND time <= '{}'::TIMESTAMP
-                GROUP BY time_bucket_gapfill('{}', time)
-                LIMIT 120",
-                where_query, start, end, interval_str
-            )
-        }
-        100001..=10000000 => {
-            format!(
-                "
-            SELECT sum(count)::bigint
-                FROM {}_sec_count
-                WHERE time_bucket >= '{}'::TIMESTAMP
-                  AND time_bucket <= '{}'::TIMESTAMP
-                GROUP BY time_bucket_gapfill('{}', time_bucket)
-                LIMIT 120",
-                table, start, end, interval_str
-            )
-        }
-        _ => {
-            format!(
-                "
-            SELECT sum(count)::bigint
-                FROM {}_min_count
-                WHERE time_bucket >= '{}'::TIMESTAMP
-                  AND time_bucket <= '{}'::TIMESTAMP
-                GROUP BY time_bucket_gapfill('{}', time_bucket) 
-                LIMIT 120",
-                table, start, end, interval_str
-            )
-        }
-    };
-    let result = sqlx::query(query.as_str()).fetch_all(&data.db).await;
-    match result {
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
-        Ok(rows) => {
-            let mut ret_val: Vec<serde_json::Number> = Vec::new();
-            for r in rows {
-                ret_val.push(r.try_get::<i64, _>(0).unwrap_or(0).into());
-            }
-            Ok(ret_val)
-        }
-    }
-}
-
 pub async fn density_handler(
-    State(data): State<Arc<AppState>>,
+    State(data): State<AppState>,
     density_query: Json<LogQuery>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let logs = match get_density(
-        &data,
-        density_query.table.to_owned(),
-        density_query.start.naive_utc(),
-        density_query.end.naive_utc(),
-    )
-    .await
-    {
-        Ok(vec) => vec,
-        Err((code, json)) => return Err((code, json)),
-    };
-    return Ok(axum::Json(logs));
+) -> Result<impl IntoResponse, AppError> {
+    let logs = data
+        .db
+        .get_density(
+            density_query.start.naive_utc(),
+            density_query.end.naive_utc(),
+            &density_query.table,
+        )
+        .await?;
+    Ok(axum::Json(logs))
 }
 
 pub async fn logs_handler(
-    State(data): State<Arc<AppState>>,
+    State(data): State<AppState>,
     log_query: Json<LogQuery>,
-) -> Result<impl IntoResponse, String> {
-    let logs = match get_logs(
-        &data,
-        log_query.table.to_owned(),
-        log_query.start.naive_utc(),
-        log_query.end.naive_utc(),
-        log_query.offset,
-    )
-    .await
-    {
-        Ok(vec) => vec,
-        Err(error) => return Err(error),
-    };
-    return Ok(Json(logs));
+) -> Result<impl IntoResponse, AppError> {
+    Ok(axum::Json(
+        data.db
+            .get_logs(
+                log_query.start.naive_utc(),
+                log_query.end.naive_utc(),
+                log_query.offset,
+                log_query.table.to_owned(),
+            )
+            .await?,
+    ))
 }
 
 pub async fn view_handler(
-    State(data): State<Arc<AppState>>,
+    State(data): State<AppState>,
     log_query: Json<ViewQuery>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
+) -> Result<impl IntoResponse, AppError> {
     let filter_name = log_query.filter.name.to_owned();
     let filter_query = log_query.filter.query.to_owned();
     let (names, queries) = log_query
@@ -319,104 +71,56 @@ pub async fn view_handler(
     } else {
         filter_name
     };
-    match create_view(&data, queries, names, filter_name, filter_query).await {
-        Ok(vec) => Ok(vec),
-        Err(error) => return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string())),
-    }
+    data.db
+        .upsert_columns_and_filters(&names, &queries, &filter_name, &filter_query)
+        .await?;
+
+    data.db.create_mat_views(filter_name, filter_query).await?;
+    Ok((StatusCode::CREATED, "{}".to_string()))
 }
 
-pub async fn list_metrics(
-    State(data): State<Arc<AppState>>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    match sqlx::query("SELECT name FROM cols")
-        .fetch_all(&data.db)
-        .await
-    {
-        Ok(rows) => Ok(axum::Json(
-            rows.into_iter()
-                .map(|r| r.get::<String, _>(0).into())
-                .collect::<Vec<String>>(),
-        )),
-        Err(error) => Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string())),
-    }
+pub async fn list_metrics(State(data): State<AppState>) -> Result<impl IntoResponse, AppError> {
+    Ok(axum::Json(data.db.get_col_names().await?))
 }
 
 pub async fn post_get_metric(
-    State(data): State<Arc<AppState>>,
+    State(data): State<AppState>,
     Json(metric_query): Json<MetricQuery>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    match sqlx::query("SELECT query, metric_agg FROM cols WHERE name = $1")
-        .bind(metric_query.metric_name)
-        .fetch_one(&data.db)
-        .await
-    {
-        Ok(rows) => {
-            let col_query: String = rows.get::<String, _>(0).into();
-            let metric_agg: String = rows.get::<String, _>(1).into();
-            let interval_millis = (metric_query.end - metric_query.start).num_milliseconds();
-            let interval_micro = (metric_query.end - metric_query.start).num_microseconds();
-            let interval_str = match interval_micro {
-                Some(val) => format!("{} microseconds", max(val / 119, 10)),
-                None => format!("{} milliseconds", max(interval_millis / 119, 10)),
-            };
-            let try_filter = sqlx::query("SELECT query FROM filters WHERE name = $1")
-                .bind(metric_query.view_name)
-                .fetch_one(&data.db)
-                .await;
-            let where_query = match try_filter {
-                Ok(r) => r.get::<String, _>(0),
-                Err(error) => return Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string())),
-            };
-            let query = format!(
-                "
-            SELECT {metric_agg}(({col_query})::numeric)  
-                FROM logs 
-                WHERE jsonb_typeof({col_query}) = 'number' 
-                  AND {where_query}
-                  AND time >= '{}'::TIMESTAMP 
-                  AND time <= '{}'::TIMESTAMP 
-                GROUP BY time_bucket_gapfill('{interval_str}', time) 
-                LIMIT 120",
-                metric_query.start, metric_query.end,
-            );
-            match sqlx::query(query.as_str()).fetch_all(&data.db).await {
-                Ok(b) => Ok(axum::Json(
-                    b.into_iter()
-                        .map(|r| match r.try_get::<BigDecimal, _>(0) {
-                            Err(_) => None,
-                            Ok(val) => val.to_f64(),
-                        })
-                        .collect::<Vec<Option<f64>>>(),
-                )),
-                Err(err) => Err((StatusCode::INTERNAL_SERVER_ERROR, err.to_string())),
-            }
-        }
-        Err(error) => Err((StatusCode::NOT_FOUND, error.to_string())),
-    }
+) -> Result<impl IntoResponse, AppError> {
+    let (col_query, metric_agg) = data
+        .db
+        .get_metric_query_agg(metric_query.metric_name)
+        .await?;
+    let filter_query = data.db.get_filter(metric_query.view_name).await?;
+    Ok(axum::Json(
+        data.db
+            .get_filters(
+                metric_query.start,
+                metric_query.end,
+                metric_agg,
+                col_query,
+                filter_query,
+            )
+            .await?,
+    ))
 }
 
-pub async fn list_views(
-    State(data): State<Arc<AppState>>,
-) -> Result<impl IntoResponse, (StatusCode, String)> {
-    match data.db.list_filters().await {
-        Ok(rows) => Ok(axum::Json(
-            rows.into_iter()
-                .map(|r| {
-                    let mut val = serde_json::Map::new();
-                    val.insert("name".to_owned(), r.get::<String, _>(0).into());
-                    let aggs: Vec<String> = r.get::<Vec<String>, _>(1).into();
-                    let metrics: Vec<String> = r.get::<Vec<String>, _>(2).into();
-                    val.insert(
-                        "cols".to_owned(),
-                        zip(aggs, metrics)
-                            .into_iter()
-                            .map(|(agg, metric)| json!({"metric": metric, "agg":agg}))
-                            .collect(),
-                    );
-                    val.into()
-                })
-                .collect::<Vec<serde_json::Value>>(),
-        )),
-        Err(error) => Err((StatusCode::INTERNAL_SERVER_ERROR, error.to_string())),
-    }
+pub async fn list_views(State(data): State<AppState>) -> Result<impl IntoResponse, AppError> {
+    let rows = data.db.list_filters().await?;
+    Ok(axum::Json(
+        rows.into_iter()
+            .map(|(name, aggs, metrics)| {
+                let mut val = serde_json::Map::new();
+                val.insert("name".to_owned(), name.into());
+                val.insert(
+                    "cols".to_owned(),
+                    zip(aggs, metrics)
+                        .into_iter()
+                        .map(|(agg, metric)| json!({"metric": metric, "agg":agg}))
+                        .collect(),
+                );
+                val.into()
+            })
+            .collect::<Vec<serde_json::Value>>(),
+    ))
 }
