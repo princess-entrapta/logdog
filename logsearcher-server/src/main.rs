@@ -6,25 +6,18 @@ mod repository;
 
 use crate::config::Config;
 use crate::repository::Repository;
-use axum::{
-    http::{
-        header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
-        HeaderValue, Method,
-    },
-    routing::{delete, get, post},
-    Router,
+use axum::http::{
+    header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE},
+    HeaderValue, Method,
 };
 use dotenv::dotenv;
 use tower_http::cors::CorsLayer;
 
 #[derive(Clone)]
 pub struct AppState {
-    db: Repository,
+    pub db: Repository,
 }
-use crate::handler::{
-    create_view_handler, delete_view_handler, density_handler, health_checker_handler,
-    list_metrics, list_views, logs_handler, post_get_metric,
-};
+use crate::handler::app;
 
 #[tokio::main]
 async fn main() {
@@ -37,15 +30,7 @@ async fn main() {
         .allow_credentials(true)
         .allow_headers([AUTHORIZATION, ACCEPT, CONTENT_TYPE]);
 
-    let app = Router::new()
-        .route("/api/health", get(health_checker_handler))
-        .route("/api/density", post(density_handler))
-        .route("/api/logs", post(logs_handler))
-        .route("/api/listviews", get(list_views))
-        .route("/api/view", post(create_view_handler))
-        .route("/api/view/:view_name", delete(delete_view_handler))
-        .route("/api/metric", get(list_metrics))
-        .route("/api/get/metric", post(post_get_metric))
+    let app = app()
         .with_state(AppState {
             db: Repository::connect(config.pg_url.as_str()).await,
         })

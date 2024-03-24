@@ -6,7 +6,7 @@ use sqlx::{types::BigDecimal, PgPool, Row};
 
 #[derive(Clone)]
 pub struct Repository {
-    pool: PgPool,
+    pub pool: PgPool,
 }
 
 impl Repository {

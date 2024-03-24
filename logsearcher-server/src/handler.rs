@@ -2,6 +2,8 @@ use axum::{
     extract::{Json, Path, State},
     http::StatusCode,
     response::IntoResponse,
+    routing::{delete, get, post},
+    Router,
 };
 use serde_json::json;
 use std::iter::zip;
@@ -11,6 +13,18 @@ use crate::{
     model::{LogQuery, MetricQuery, ViewQuery},
     AppState,
 };
+
+pub fn app() -> Router<AppState> {
+    Router::new()
+        .route("/api/health", get(health_checker_handler))
+        .route("/api/density", post(density_handler))
+        .route("/api/logs", post(logs_handler))
+        .route("/api/listviews", get(list_views))
+        .route("/api/view", post(create_view_handler))
+        .route("/api/view/:view_name", delete(delete_view_handler))
+        .route("/api/metric", get(list_metrics))
+        .route("/api/get/metric", post(post_get_metric))
+}
 
 pub async fn health_checker_handler() -> impl IntoResponse {
     const MESSAGE: &str = "Log viewer utility";
@@ -131,4 +145,53 @@ pub async fn list_views(State(data): State<AppState>) -> Result<impl IntoRespons
             })
             .collect::<Vec<serde_json::Value>>(),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::repository::Repository;
+
+    use super::{app, AppState};
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    #[sqlx::test]
+    async fn test_health(pool: sqlx::PgPool) {
+        let app = app().with_state(AppState {
+            db: Repository { pool: pool },
+        });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/health")
+                    .method("GET")
+                    .body("".to_owned())
+                    .unwrap(),
+            )
+            .await;
+        assert_eq!(resp.expect("Should not fail").status(), 200);
+    }
+
+    #[sqlx::test]
+    async fn test_list_metric(pool: sqlx::PgPool) {
+        let app = app().with_state(AppState {
+            db: Repository { pool: pool },
+        });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/metric")
+                    .method("GET")
+                    .body("".to_owned())
+                    .unwrap(),
+            )
+            .await
+            .expect("Request should not fail");
+        assert_eq!(resp.status(), 200);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&body[..], b"[\"Data\"]");
+    }
 }

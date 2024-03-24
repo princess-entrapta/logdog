@@ -5,7 +5,8 @@ pub struct Config {
 impl Config {
     pub fn new() -> Self {
         Self {
-            pg_url: "postgresql://postgres:test@localhost/postgres".to_owned(),
+            pg_url: dotenv::var("DATABASE_URL")
+                .unwrap_or("postgresql://postgres:test@localhost/postgres".to_owned()),
         }
     }
 }
