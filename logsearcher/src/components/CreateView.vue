@@ -13,7 +13,7 @@ export default {
     createView() {
       const viewName = this.filterName
       this.loading = true
-      fetch("/api/createview", {
+      fetch("/api/view", {
         method: "POST",
         body: JSON.stringify({ columns: this.cols, filter: { name: viewName, query: this.search } }),
         headers: { "Content-Type": "application/json" }
