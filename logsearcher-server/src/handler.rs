@@ -155,6 +155,8 @@ mod tests {
     use super::{app, AppState};
     use axum::http::Request;
     use http_body_util::BodyExt;
+    use serde_json::json;
+    use sqlx::Row;
     use tower::ServiceExt;
 
     #[sqlx::test]
@@ -172,6 +174,31 @@ mod tests {
             )
             .await;
         assert_eq!(resp.expect("Should not fail").status(), 200);
+    }
+
+    #[sqlx::test]
+    async fn test_list_view(pool: sqlx::PgPool) {
+        let app = app().with_state(AppState {
+            db: Repository { pool: pool },
+        });
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/listviews")
+                    .method("GET")
+                    .body("".to_owned())
+                    .unwrap(),
+            )
+            .await
+            .expect("Request should not fail");
+        assert_eq!(resp.status(), 200);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        println!("{}", String::from_utf8(body.to_vec()).unwrap());
+        assert_eq!(
+            &body[..],
+            b"[{\"cols\":[{\"agg\":\"max\",\"metric\":\"Data\"}],\"name\":\"logs\"}]"
+        );
     }
 
     #[sqlx::test]
@@ -193,5 +220,97 @@ mod tests {
 
         let body = resp.into_body().collect().await.unwrap().to_bytes();
         assert_eq!(&body[..], b"[\"Data\"]");
+    }
+
+    #[sqlx::test]
+    async fn test_post_get_metric(pool: sqlx::PgPool) {
+        let app = app().with_state(AppState {
+            db: Repository { pool: pool },
+        });
+        let send_body = json!({"start": chrono::DateTime::from_timestamp(1711302824, 0),
+        "end": chrono::DateTime::from_timestamp(1711302888, 0),
+        "metric_name": "Data",
+        "view_name": "logs"})
+        .to_string();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/get/metric")
+                    .header("Content-Type", "application/json")
+                    .method("POST")
+                    .body(send_body)
+                    .unwrap(),
+            )
+            .await
+            .expect("Request should not fail");
+        assert_eq!(resp.status(), 200);
+
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let expected = Vec::from_iter(std::iter::repeat(serde_json::Value::Null).take(120));
+        assert_eq!(
+            serde_json::from_str::<Vec<serde_json::Value>>(
+                String::from_utf8(body.to_vec()).unwrap().as_str()
+            )
+            .unwrap(),
+            expected
+        );
+    }
+
+    #[sqlx::test]
+    async fn test_create_view(pool: sqlx::PgPool) {
+        let app = app().with_state(AppState {
+            db: Repository { pool: pool.clone() },
+        });
+        let send_body = json!({
+            "columns": [{"name": "test_col", "query": "logdata", "metric_agg": "max"}],
+            "filter": {"name": "test_view", "query": "true"}})
+        .to_string();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/view")
+                    .header("Content-Type", "application/json")
+                    .method("POST")
+                    .body(send_body)
+                    .unwrap(),
+            )
+            .await
+            .expect("Request should not fail");
+        assert_eq!(resp.status(), 201);
+
+        assert_eq!(
+            sqlx::query(
+                "SELECT filters.name, filters.query, cols.name, cols.query
+            FROM filters JOIN column_filter ON filters.name = filter_name 
+                         JOIN cols on cols.name = column_name ORDER BY filter_name;",
+            )
+            .fetch_all(&pool)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get::<String, _>(0),
+                    row.get::<String, _>(1),
+                    row.get::<String, _>(2),
+                    row.get::<String, _>(3),
+                )
+            })
+            .collect::<Vec<(String, String, String, String)>>(),
+            vec![
+                (
+                    "logs".to_string(),
+                    "true".to_string(),
+                    "Data".to_string(),
+                    "logdata".to_string()
+                ),
+                (
+                    "test_view".to_string(),
+                    "true".to_string(),
+                    "test_col".to_string(),
+                    "logdata".to_string()
+                )
+            ]
+        );
     }
 }

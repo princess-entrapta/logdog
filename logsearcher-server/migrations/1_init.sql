@@ -37,4 +37,4 @@ VALUES
 INSERT INTO
     cols (name, query, metric_agg)
 VALUES
-    ('Data', 'logdata', '');
+    ('Data', 'logdata', 'max');
